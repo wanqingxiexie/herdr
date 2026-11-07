@@ -93,6 +93,7 @@ pub(super) fn snapshot_with_completions(
                         key: worktree.repo_key,
                         label: worktree.repo_name,
                         is_linked_worktree: worktree.is_linked_worktree,
+                        parent_workspace_id: worktree.parent_workspace_id,
                     }),
                 agent_status: workspace.agent_status,
             }

@@ -98,6 +98,7 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
         key: "repo".into(),
         label: "repo".into(),
         is_linked_worktree: false,
+        parent_workspace_id: None,
     });
     snapshot.workspaces.push(ClientShellWorkspace {
         workspace_id: "ws_2".into(),
@@ -113,6 +114,7 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
             key: "repo".into(),
             label: "repo".into(),
             is_linked_worktree: true,
+            parent_workspace_id: Some("ws_1".into()),
         }),
         focused: false,
         agent_status: AgentStatus::Idle,
@@ -142,7 +144,7 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
     replacement.workspaces[1].agent_status = AgentStatus::Blocked;
     let mut replacement_surface = surface();
     replacement_surface.projection_revision = 2;
-    state.collapsed_groups.insert("repo".into());
+    state.collapsed_groups.insert("ws_1".into());
     state.set_snapshot(Box::new(replacement));
     state.set_pane_surface(replacement_surface);
     let collapsed = state.compose(106, 20).expect("collapsed worktree group");
@@ -179,6 +181,7 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
             key: "repo".into(),
             label: "repo".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
         let mut duplicate = projected.workspaces[0].clone();
         duplicate.workspace_id = "ws_duplicate".into();
@@ -190,7 +193,9 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
             let mut child = projected.workspaces[0].clone();
             child.workspace_id = "ws_child".into();
             child.focused = false;
-            child.worktree.as_mut().unwrap().is_linked_worktree = true;
+            let child_worktree = child.worktree.as_mut().unwrap();
+            child_worktree.is_linked_worktree = true;
+            child_worktree.parent_workspace_id = Some("ws_1".into());
             projected.workspaces.push(child);
         }
 
@@ -199,7 +204,7 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
         state.set_pane_surface(surface());
         for collapsed in [false, true] {
             if collapsed {
-                state.collapsed_groups.insert("repo".into());
+                state.collapsed_groups.insert("ws_1".into());
             }
             let frame = state
                 .compose(106, 24)
@@ -212,7 +217,10 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                     .find(|hit| hit.workspace_id == workspace_id)
                     .expect("repository parent remains visible");
                 assert!(!hit.indented);
-                assert_eq!(hit.group_toggle.is_some(), linked_child);
+                assert_eq!(
+                    hit.group_toggle.is_some(),
+                    linked_child && workspace_id == "ws_1"
+                );
             }
             let parent = state.hits.workspaces[0].rect;
             let status_cell =
@@ -229,7 +237,13 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                     .any(|hit| hit.workspace_id == "ws_child" && hit.indented),
                 linked_child && !collapsed
             );
-            let duplicate = state.hits.workspaces[1].rect;
+            let duplicate = state
+                .hits
+                .workspaces
+                .iter()
+                .find(|hit| hit.workspace_id == "ws_duplicate")
+                .expect("duplicate parent hit")
+                .rect;
             state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
                 column: duplicate.x + 2,
@@ -258,11 +272,12 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                 panic!("repository workspace context menu");
             };
             assert_eq!(menu.items()[1].label, "Close");
-            assert_eq!(
-                menu.items()
+            assert!(
+                !menu
+                    .items()
                     .iter()
                     .any(|item| matches!(item.action, ClientContextMenuAction::ToggleGroup)),
-                linked_child
+                "a duplicate repository parent has no children of its own"
             );
             if linked_child {
                 let mut replacement = original.clone();
@@ -377,12 +392,24 @@ fn workspace_click_waits_for_release_and_drag_reorders_by_stable_id() {
 }
 
 #[test]
-fn duplicate_repo_parent_drag_does_not_target_its_own_move_block() {
+fn duplicate_repo_parent_is_its_own_move_block_target() {
+    // Two parents of the same repository are independent sidebar groups, so a
+    // parent's move block contains only its own nested worktrees.
     let mut projected = snapshot();
     projected.workspaces[0].worktree = Some(ClientShellWorktree {
         key: "repo".into(),
         label: "repo".into(),
         is_linked_worktree: false,
+        parent_workspace_id: None,
+    });
+    let mut child = projected.workspaces[0].clone();
+    child.workspace_id = "ws_child".into();
+    child.focused = false;
+    child.worktree = Some(ClientShellWorktree {
+        key: "repo".into(),
+        label: "repo".into(),
+        is_linked_worktree: true,
+        parent_workspace_id: Some("ws_1".into()),
     });
     let mut other = projected.workspaces[0].clone();
     other.workspace_id = "ws_other".into();
@@ -391,7 +418,7 @@ fn duplicate_repo_parent_drag_does_not_target_its_own_move_block() {
     let mut duplicate = projected.workspaces[0].clone();
     duplicate.workspace_id = "ws_duplicate".into();
     duplicate.focused = false;
-    projected.workspaces.extend([other, duplicate]);
+    projected.workspaces.extend([child, other, duplicate]);
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
@@ -399,7 +426,13 @@ fn duplicate_repo_parent_drag_does_not_target_its_own_move_block() {
         .compose(106, 24)
         .expect("separated repository parents");
     let source = state.hits.workspaces[0].rect;
-    let target = state.hits.workspaces[2].rect;
+    let target = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.workspace_id == "ws_duplicate")
+        .expect("duplicate parent hit")
+        .rect;
     for (kind, rect, row) in [
         (MouseEventKind::Down(MouseButton::Left), source, source.y),
         (
@@ -426,7 +459,15 @@ fn duplicate_repo_parent_drag_does_not_target_its_own_move_block() {
         row: target.y.saturating_sub(1),
         modifiers: KeyModifiers::empty(),
     })]);
-    assert!(drop.actions.is_empty());
+    assert!(
+        matches!(drop.actions.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::WorkspaceMoveBlock(params)
+                if params.workspace_ids == ["ws_1", "ws_child"]
+                    && params.before_workspace_id.as_deref() == Some("ws_duplicate"))),
+        "{:?}",
+        drop.actions
+    );
 }
 
 #[test]
@@ -436,6 +477,7 @@ fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
         key: "repo".into(),
         label: "repo".into(),
         is_linked_worktree: false,
+        parent_workspace_id: None,
     });
     let mut child = projected.workspaces[0].clone();
     child.workspace_id = "ws_child".into();
@@ -446,6 +488,7 @@ fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
         key: "repo".into(),
         label: "repo".into(),
         is_linked_worktree: true,
+        parent_workspace_id: Some("ws_1".into()),
     });
     let mut other = projected.workspaces[0].clone();
     other.workspace_id = "ws_other".into();
@@ -521,11 +564,30 @@ fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
     state
         .compose(106, 24)
         .expect("repository block with duplicate root");
-    let duplicate = state.hits.workspaces[1].rect;
-    let other = state.hits.workspaces[3].rect;
+    let duplicate = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.workspace_id == "ws_duplicate")
+        .expect("duplicate parent hit")
+        .rect;
+    let other = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.workspace_id == "ws_other")
+        .expect("other workspace hit")
+        .rect;
+    let first = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.workspace_id == "ws_1")
+        .expect("first workspace hit")
+        .rect;
     for (source, target_row, moving_duplicate) in [
-        (other, duplicate.y.saturating_sub(1), false),
-        (duplicate, other.bottom(), true),
+        (other, first.y.saturating_sub(1), false),
+        (duplicate, duplicate.bottom(), true),
     ] {
         state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -549,12 +611,16 @@ fn workspace_drag_moves_parent_worktree_as_one_block_and_rejects_child() {
             assert!(matches!(moved.actions.as_slice(),
                 [ClientShellAction::Endpoint { request, .. }]
                     if matches!(&request.method, crate::api::schema::Method::WorkspaceMoveBlock(params)
-                        if params.workspace_ids == ["ws_duplicate", "ws_1", "ws_child"] && params.before_workspace_id.is_none())));
+                        if params.workspace_ids == ["ws_duplicate"] && params.before_workspace_id.is_none())));
         } else {
-            assert!(matches!(moved.actions.as_slice(),
+            assert!(
+                matches!(moved.actions.as_slice(),
                 [ClientShellAction::Endpoint { request, .. }]
                     if matches!(&request.method, crate::api::schema::Method::WorkspaceMove(params)
-                        if params.workspace_id == "ws_other" && params.insert_index == 0)));
+                        if params.workspace_id == "ws_other" && params.insert_index == 0)),
+                "{:?}",
+                moved.actions
+            );
         }
     }
 }
@@ -1435,6 +1501,7 @@ fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
             key: "repo-key".into(),
             label: "repo".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
         state.set_snapshot(Box::new(snapshot));

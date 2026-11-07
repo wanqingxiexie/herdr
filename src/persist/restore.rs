@@ -1111,6 +1111,7 @@ mod tests {
             repo_root: root.join("original-repo"),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         };
 
         // Missing and leftover directories may discover an unrelated ancestor repo.
@@ -1447,6 +1448,7 @@ mod tests {
                 repo_root: cwd.clone(),
                 checkout_path: missing.clone(),
                 is_linked_worktree: true,
+                parent_workspace_id: None,
             };
             snapshot.workspaces[0].worktree_space = Some(membership.clone());
             let failed = snapshot.workspaces[0].tabs[0].panes.get_mut(&1).unwrap();

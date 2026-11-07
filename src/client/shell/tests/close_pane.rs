@@ -229,6 +229,7 @@ fn last_pane_close_preserves_parent_group_and_linked_workspace_scope() {
             key: "repo".into(),
             label: "repo".into(),
             is_linked_worktree: linked,
+            parent_workspace_id: None,
         });
         let mut sibling = projected.workspaces[0].clone();
         sibling.workspace_id = "ws_2".into();

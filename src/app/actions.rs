@@ -882,38 +882,80 @@ impl AppState {
         self.apply_pane_zoom(ws_idx, pane_id, PaneZoomCommand::Toggle);
     }
 
+    /// Workspaces an implicit close (pane or tab close) takes with it.
+    ///
+    /// A worktree group is scoped to one parent workspace, so closing a parent
+    /// always takes exactly the children the sidebar shows nested under it.
     pub(crate) fn workspace_close_indices(&self, ws_idx: usize) -> Vec<usize> {
-        let group = self.workspace_group_close_indices(ws_idx);
-        if group.iter().any(|index| {
-            *index != ws_idx
-                && self.workspaces[*index]
-                    .worktree_space()
-                    .is_some_and(|space| !space.is_linked_worktree)
-        }) {
-            vec![ws_idx]
-        } else {
-            group
+        self.workspace_group_close_indices(ws_idx)
+    }
+
+    /// Resolves the workspace a linked worktree nests under.
+    ///
+    /// Creation-time provenance wins. Sessions saved before that provenance
+    /// existed fall back to the label prefix before the first `/`, then to the
+    /// first parent workspace of the same repository.
+    pub(crate) fn worktree_parent_index(&self, ws_idx: usize) -> Option<usize> {
+        let workspace = self.workspaces.get(ws_idx)?;
+        let space = workspace.worktree_space()?;
+        if !space.is_linked_worktree {
+            return None;
         }
+        let is_parent_of_repo = |candidate: &crate::workspace::Workspace| {
+            candidate.worktree_space().is_some_and(|candidate| {
+                !candidate.is_linked_worktree && candidate.key == space.key
+            })
+        };
+        if let Some(parent_id) = space.parent_workspace_id.as_deref() {
+            if let Some(parent) = self
+                .workspaces
+                .iter()
+                .position(|candidate| candidate.id == parent_id)
+            {
+                if parent != ws_idx && is_parent_of_repo(&self.workspaces[parent]) {
+                    return Some(parent);
+                }
+            }
+        }
+        let display_name = |workspace: &crate::workspace::Workspace| {
+            workspace.display_name_from_terminals(&self.terminals)
+        };
+        if let Some((prefix, _)) = display_name(workspace).split_once('/') {
+            if let Some(parent) = self.workspaces.iter().position(|candidate| {
+                display_name(candidate) == prefix && is_parent_of_repo(candidate)
+            }) {
+                if parent != ws_idx {
+                    return Some(parent);
+                }
+            }
+        }
+        self.workspaces
+            .iter()
+            .position(is_parent_of_repo)
+            .filter(|parent| *parent != ws_idx)
+    }
+
+    /// Linked worktree workspaces nested under `ws_idx`.
+    pub(crate) fn worktree_children_indices(&self, ws_idx: usize) -> Vec<usize> {
+        if !self
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.worktree_space())
+            .is_some_and(|space| !space.is_linked_worktree)
+        {
+            return Vec::new();
+        }
+        (0..self.workspaces.len())
+            .filter(|index| self.worktree_parent_index(*index) == Some(ws_idx))
+            .collect()
     }
 
     pub(crate) fn workspace_group_close_indices(&self, ws_idx: usize) -> Vec<usize> {
-        self.workspaces
-            .get(ws_idx)
-            .and_then(|ws| ws.worktree_space())
-            .filter(|space| !space.is_linked_worktree)
-            .map(|space| {
-                self.workspaces
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, ws)| {
-                        ws.worktree_space()
-                            .is_some_and(|member| member.key == space.key)
-                            .then_some(idx)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .filter(|indices| indices.len() >= 2)
-            .unwrap_or_else(|| vec![ws_idx])
+        let children = self.worktree_children_indices(ws_idx);
+        if children.is_empty() {
+            return vec![ws_idx];
+        }
+        std::iter::once(ws_idx).chain(children).collect()
     }
 
     pub(crate) fn workspace_close_would_close_worktree_group(&self, ws_idx: usize) -> bool {
@@ -2154,6 +2196,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: format!("/repo/worktree-{ws_idx}").into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
     }
 
@@ -2164,6 +2207,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: "/repo/herdr".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
     }
 
@@ -2606,6 +2650,7 @@ mod tests {
             repo_root: "/repo".into(),
             checkout_path: "/checkout".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         };
         let current = crate::workspace::WorktreeSpaceMembership {
             key: "new-repo".into(),
@@ -2892,6 +2937,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: "/repo/herdr".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
         state.workspaces[1].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
@@ -2899,6 +2945,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: "/repo/herdr-issue".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         state.selected = 0;
         state.active = Some(0);

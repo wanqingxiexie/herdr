@@ -455,75 +455,108 @@ pub(crate) fn render_sidebar(
     );
 }
 
+fn is_parent(workspace: &ClientShellWorkspace) -> bool {
+    workspace
+        .worktree
+        .as_ref()
+        .is_some_and(|worktree| !worktree.is_linked_worktree)
+}
+
+fn workspace_index_by_id(snapshot: &ClientShellSnapshot, workspace_id: &str) -> Option<usize> {
+    snapshot
+        .workspaces
+        .iter()
+        .position(|workspace| workspace.workspace_id == workspace_id)
+}
+
+/// Resolves the workspace a linked worktree nests under.
+///
+/// The endpoint records the workspace the checkout was created from. Older
+/// endpoints and sessions saved before that provenance existed fall back to
+/// the label prefix before the first `/`, and finally to the first parent
+/// workspace of the same repository.
+pub(in crate::client::shell) fn linked_parent_index(
+    snapshot: &ClientShellSnapshot,
+    index: usize,
+) -> Option<usize> {
+    let workspace = snapshot.workspaces.get(index)?;
+    let worktree = workspace.worktree.as_ref()?;
+    if !worktree.is_linked_worktree {
+        return None;
+    }
+    if let Some(parent_id) = worktree.parent_workspace_id.as_deref() {
+        if let Some(parent) = workspace_index_by_id(snapshot, parent_id) {
+            if parent != index && is_parent(&snapshot.workspaces[parent]) {
+                return Some(parent);
+            }
+        }
+    }
+    if let Some((prefix, _)) = workspace.label.split_once('/') {
+        if let Some(parent) = snapshot.workspaces.iter().position(|candidate| {
+            candidate.label == prefix
+                && is_parent(candidate)
+                && candidate
+                    .worktree
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.key == worktree.key)
+        }) {
+            if parent != index {
+                return Some(parent);
+            }
+        }
+    }
+    snapshot.workspaces.iter().position(|candidate| {
+        is_parent(candidate)
+            && candidate
+                .worktree
+                .as_ref()
+                .is_some_and(|candidate| candidate.key == worktree.key)
+    })
+}
+
+/// Linked worktree indices grouped by the workspace they nest under.
+pub(in crate::client::shell) fn space_children(
+    snapshot: &ClientShellSnapshot,
+) -> HashMap<usize, Vec<usize>> {
+    let mut children = HashMap::<usize, Vec<usize>>::new();
+    for index in 0..snapshot.workspaces.len() {
+        if let Some(parent) = linked_parent_index(snapshot, index) {
+            children.entry(parent).or_default().push(index);
+        }
+    }
+    children
+}
+
 pub(crate) fn workspace_entries(
     snapshot: &ClientShellSnapshot,
     collapsed_groups: &HashSet<String>,
 ) -> Vec<WorkspaceEntry> {
-    let mut members = HashMap::<&str, Vec<usize>>::new();
-    for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        if let Some(worktree) = &workspace.worktree {
-            members.entry(&worktree.key).or_default().push(index);
-        }
-    }
-    let grouped = members
-        .iter()
-        .filter(|(_, indices)| {
-            indices.iter().any(|index| {
-                snapshot.workspaces[*index]
-                    .worktree
-                    .as_ref()
-                    .is_some_and(|worktree| worktree.is_linked_worktree)
-            }) && indices.iter().any(|index| {
-                snapshot.workspaces[*index]
-                    .worktree
-                    .as_ref()
-                    .is_some_and(|worktree| !worktree.is_linked_worktree)
-            })
-        })
-        .map(|(key, _)| *key)
-        .collect::<HashSet<_>>();
-    let mut emitted = HashSet::<&str>::new();
+    let children = space_children(snapshot);
+    let nested = children
+        .values()
+        .flatten()
+        .copied()
+        .collect::<HashSet<usize>>();
     let mut entries = Vec::new();
     for (index, workspace) in snapshot.workspaces.iter().enumerate() {
-        let Some(worktree) = workspace
-            .worktree
-            .as_ref()
-            .filter(|worktree| grouped.contains(worktree.key.as_str()))
-        else {
-            entries.push(WorkspaceEntry {
-                index,
-                indented: false,
-                last_child: false,
-            });
-            continue;
-        };
-        if !emitted.insert(&worktree.key) {
+        // Nested worktrees are emitted directly below their own parent.
+        if nested.contains(&index) {
             continue;
         }
-        let Some(group_members) = members.get(worktree.key.as_str()) else {
+        entries.push(WorkspaceEntry {
+            index,
+            indented: false,
+            last_child: false,
+        });
+        let Some(group_members) = children.get(&index) else {
             continue;
         };
-        for parent in group_members.iter().copied().filter(|member| {
-            snapshot.workspaces[*member]
-                .worktree
-                .as_ref()
-                .is_some_and(|worktree| !worktree.is_linked_worktree)
-        }) {
-            entries.push(WorkspaceEntry {
-                index: parent,
-                indented: false,
-                last_child: false,
-            });
-        }
-        if collapsed_groups.contains(&worktree.key) {
-            if let Some(active) = group_members.iter().copied().find(|member| {
-                let workspace = &snapshot.workspaces[*member];
-                workspace.focused
-                    && workspace
-                        .worktree
-                        .as_ref()
-                        .is_some_and(|worktree| worktree.is_linked_worktree)
-            }) {
+        if collapsed_groups.contains(&workspace.workspace_id) {
+            if let Some(active) = group_members
+                .iter()
+                .copied()
+                .find(|member| snapshot.workspaces[*member].focused)
+            {
                 entries.push(WorkspaceEntry {
                     index: active,
                     indented: true,
@@ -532,72 +565,39 @@ pub(crate) fn workspace_entries(
             }
             continue;
         }
-        let children = group_members
-            .iter()
-            .copied()
-            .filter(|member| {
-                snapshot.workspaces[*member]
-                    .worktree
-                    .as_ref()
-                    .is_some_and(|worktree| worktree.is_linked_worktree)
-            })
-            .collect::<Vec<_>>();
-        for (child_index, child) in children.iter().enumerate() {
+        for (child_index, child) in group_members.iter().enumerate() {
             entries.push(WorkspaceEntry {
                 index: *child,
                 indented: true,
-                last_child: child_index + 1 == children.len(),
+                last_child: child_index + 1 == group_members.len(),
             });
         }
     }
     entries
 }
 
+/// Collapse key for a parent workspace that currently has nested worktrees.
 fn parent_group_key(snapshot: &ClientShellSnapshot, index: usize) -> Option<String> {
     let workspace = snapshot.workspaces.get(index)?;
-    let worktree = workspace.worktree.as_ref()?;
-    if worktree.is_linked_worktree {
+    if !is_parent(workspace) {
         return None;
     }
-    snapshot
-        .workspaces
-        .iter()
-        .any(|candidate| {
-            candidate.worktree.as_ref().is_some_and(|candidate| {
-                candidate.key == worktree.key && candidate.is_linked_worktree
-            })
-        })
-        .then(|| worktree.key.clone())
+    space_children(snapshot)
+        .contains_key(&index)
+        .then(|| workspace.workspace_id.clone())
 }
 
 pub(in crate::client::shell) fn workspace_close_is_group(
     snapshot: &ClientShellSnapshot,
     workspace: &ClientShellWorkspace,
 ) -> bool {
-    let Some(worktree) = workspace
-        .worktree
-        .as_ref()
-        .filter(|worktree| !worktree.is_linked_worktree)
-    else {
+    if !is_parent(workspace) {
+        return false;
+    }
+    let Some(index) = workspace_index_by_id(snapshot, &workspace.workspace_id) else {
         return false;
     };
-    let mut has_child = false;
-    for member in &snapshot.workspaces {
-        if member.workspace_id == workspace.workspace_id {
-            continue;
-        }
-        if let Some(candidate) = member
-            .worktree
-            .as_ref()
-            .filter(|candidate| candidate.key == worktree.key)
-        {
-            if !candidate.is_linked_worktree {
-                return false;
-            }
-            has_child = true;
-        }
-    }
-    has_child
+    space_children(snapshot).contains_key(&index)
 }
 
 pub(in crate::client::shell) fn render_parent_group_toggle(
@@ -635,27 +635,16 @@ pub(in crate::client::shell) fn displayed_workspace_status(
     workspace: &ClientShellWorkspace,
     collapsed_groups: &HashSet<String>,
 ) -> crate::api::schema::AgentStatus {
-    let Some(worktree) = workspace
-        .worktree
-        .as_ref()
-        .filter(|worktree| !worktree.is_linked_worktree)
-    else {
-        return workspace.agent_status;
-    };
-    if !collapsed_groups.contains(&worktree.key) {
+    if !is_parent(workspace) || !collapsed_groups.contains(&workspace.workspace_id) {
         return workspace.agent_status;
     }
-    snapshot
-        .workspaces
-        .iter()
-        .filter(|candidate| {
-            candidate.worktree.as_ref().is_some_and(|member| {
-                member.key == worktree.key
-                    && (member.is_linked_worktree
-                        || candidate.workspace_id == workspace.workspace_id)
-            })
-        })
-        .map(|candidate| candidate.agent_status)
+    let Some(index) = workspace_index_by_id(snapshot, &workspace.workspace_id) else {
+        return workspace.agent_status;
+    };
+    let children = space_children(snapshot);
+    std::iter::once(index)
+        .chain(children.get(&index).into_iter().flatten().copied())
+        .map(|member| snapshot.workspaces[member].agent_status)
         .max_by_key(|status| status_priority(*status))
         .unwrap_or(workspace.agent_status)
 }

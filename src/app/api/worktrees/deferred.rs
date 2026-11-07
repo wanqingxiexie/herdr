@@ -73,6 +73,7 @@ impl App {
                 repo_root: api.source_repo_root.clone(),
                 checkout_path: api.source_checkout_path.clone(),
                 is_linked_worktree: false,
+                parent_workspace_id: None,
             };
             if current == &expected {
                 return Some(ws_idx);

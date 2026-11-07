@@ -524,19 +524,6 @@ impl ClientShellState {
             .workspaces
             .iter()
             .filter(|hit| hit.endpoint_id == self.active_endpoint_id && !hit.indented)
-            .filter(|hit| {
-                hit.group_toggle.as_ref().is_none_or(|(_, key)| {
-                    snapshot
-                        .workspaces
-                        .iter()
-                        .find(|workspace| {
-                            workspace.worktree.as_ref().is_some_and(|worktree| {
-                                worktree.key == *key && !worktree.is_linked_worktree
-                            })
-                        })
-                        .is_some_and(|workspace| workspace.workspace_id == hit.workspace_id)
-                })
-            })
             .map(|hit| (Some(hit.workspace_id.clone()), hit.rect.y.saturating_sub(1)))
             .collect::<Vec<_>>();
         let empty_collapsed_groups = HashSet::new();
@@ -557,15 +544,7 @@ impl ClientShellState {
                 .is_some_and(|workspace| workspace.workspace_id == last_hit.workspace_id)
         })?;
         let next = entries.get(last_position + 1);
-        if !next.is_some_and(|entry| {
-            entry.indented
-                || last_hit.group_toggle.as_ref().is_some_and(|(_, key)| {
-                    snapshot.workspaces[entry.index]
-                        .worktree
-                        .as_ref()
-                        .is_some_and(|worktree| worktree.key == *key)
-                })
-        }) {
+        if !next.is_some_and(|entry| entry.indented) {
             let before = next.and_then(|entry| {
                 snapshot
                     .workspaces
@@ -632,20 +611,19 @@ impl ClientShellState {
             return None;
         }
 
-        if let Some(worktree) = source.worktree.as_ref() {
+        if source.worktree.is_some() {
+            let children = render::space_children(snapshot);
+            let source_index = snapshot
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.workspace_id == source_workspace_id)?;
             let workspace_ids = std::iter::once(source.workspace_id.clone())
                 .chain(
-                    snapshot
-                        .workspaces
-                        .iter()
-                        .filter(|workspace| workspace.workspace_id != source.workspace_id)
-                        .filter(|workspace| {
-                            workspace
-                                .worktree
-                                .as_ref()
-                                .is_some_and(|candidate| candidate.key == worktree.key)
-                        })
-                        .map(|workspace| workspace.workspace_id.clone()),
+                    children
+                        .get(&source_index)
+                        .into_iter()
+                        .flatten()
+                        .map(|member| snapshot.workspaces[*member].workspace_id.clone()),
                 )
                 .collect::<Vec<_>>();
             if before_workspace_id.is_some_and(|target| workspace_ids.iter().any(|id| id == target))

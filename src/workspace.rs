@@ -36,6 +36,13 @@ pub struct WorktreeSpaceMembership {
     pub repo_root: PathBuf,
     pub checkout_path: PathBuf,
     pub is_linked_worktree: bool,
+    /// Workspace this checkout was created from, recorded when the worktree is
+    /// created or opened. Linked worktrees nest under this workspace in the
+    /// sidebar instead of under an arbitrary parent of the same repository.
+    /// Absent for parent workspaces and for sessions saved before this field
+    /// existed; the sidebar falls back to a label-prefix match in that case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

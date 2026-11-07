@@ -476,6 +476,7 @@ mod tests {
             repo_root: "/nonexistent/repo".into(),
             checkout_path: "/nonexistent/repo".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         };
         workspace.worktree_space = Some(membership.clone());
         app.pending_restored_worktree_spaces
@@ -546,6 +547,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: repo.clone(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
         app.state.workspaces.push(workspace);
         app.state.active = Some(0);
@@ -610,6 +612,7 @@ mod tests {
             repo_root: "/repo".into(),
             checkout_path: "/checkout".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         };
         app.state.workspaces[0].worktree_space = Some(expected.clone());
         app.pending_restored_worktree_spaces
@@ -702,6 +705,7 @@ mod tests {
             repo_root: "/repo".into(),
             checkout_path: "/repo-worktree".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         app.state.workspaces.push(child);
 
@@ -720,6 +724,7 @@ mod tests {
             repo_root: "/repo".into(),
             checkout_path: "/repo-worktree".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         app.state.workspaces.push(child);
 

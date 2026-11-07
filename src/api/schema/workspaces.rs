@@ -103,4 +103,7 @@ pub struct WorkspaceWorktreeInfo {
     pub repo_root: String,
     pub checkout_path: String,
     pub is_linked_worktree: bool,
+    /// Workspace this linked checkout was created from, when recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
 }

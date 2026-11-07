@@ -573,6 +573,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: "/repo/herdr-issue".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         app
     }
@@ -586,6 +587,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: "/repo/herdr".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
         app.state.workspaces.insert(0, parent);
         app.state.active = Some(1);
@@ -725,6 +727,10 @@ mod tests {
                 let focused_id = app.state.workspaces[0].id.clone();
                 app.state.workspaces.extend([parent, linked, duplicate]);
                 app.state.ensure_test_terminals();
+                // Pane and tab closes only need the confirmation prompt when
+                // they would take a whole worktree group with them; this test
+                // covers the group membership itself.
+                app.state.confirm_close = false;
                 app.state.assert_invariants_for_test();
                 let target_id = app.public_workspace_id(target_index);
                 let target_pane = app.state.workspaces[target_index].tabs[0].root_pane;
@@ -732,8 +738,14 @@ mod tests {
                     .state
                     .terminal_id_for_pane(target_index, target_pane)
                     .unwrap();
-                let closed_indices = if method == "group" {
-                    vec![1, 2, 3]
+                // Workspace 1 owns the linked worktree; workspace 3 is a second
+                // parent of the same repository with no children of its own.
+                // An implicit close (pane or tab) of a parent's last pane takes
+                // that parent's own worktree group with it; an explicit
+                // workspace.close needs close_group=true instead.
+                let target_has_children = target_index == 1;
+                let closed_indices = if target_has_children && method != "workspace.close" {
+                    vec![1, 2]
                 } else {
                     vec![target_index]
                 };
@@ -760,7 +772,16 @@ mod tests {
                 });
 
                 let response = app.handle_api_request(serde_json::from_value(request).unwrap());
-                let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+                if method == "workspace.close" && target_has_children {
+                    let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+                    assert_eq!(response.error.code, "workspace_group_close_required");
+                    assert!(app.event_hub.events_after(0).is_empty());
+                    assert!(app.state.terminals.contains_key(&target_terminal));
+                    app.state.assert_invariants_for_test();
+                    continue;
+                }
+                let _: SuccessResponse = serde_json::from_str(&response)
+                    .unwrap_or_else(|error| panic!("{method} {target_index}: {error}: {response}"));
 
                 assert_eq!(
                     app.state
@@ -785,7 +806,14 @@ mod tests {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                assert_eq!(closed_events, closed_ids);
+                // Pane and tab closes report only the workspace they targeted,
+                // even when that close also takes the worktree group with it.
+                let expected_events = if method == "pane.close" || method == "tab.close" {
+                    vec![target_id]
+                } else {
+                    closed_ids
+                };
+                assert_eq!(closed_events, expected_events);
             }
         }
     }

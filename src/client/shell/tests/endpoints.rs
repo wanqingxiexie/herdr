@@ -1040,6 +1040,7 @@ fn saved_machine_preserves_endpoint_scoped_worktree_collapses() {
             key: "repo".into(),
             label: "repo".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
         let mut child = snapshot.workspaces[0].clone();
         child.workspace_id = child_id.into();
@@ -1052,6 +1053,7 @@ fn saved_machine_preserves_endpoint_scoped_worktree_collapses() {
             key: "repo".into(),
             label: "repo".into(),
             is_linked_worktree: true,
+            parent_workspace_id: Some(parent_id.into()),
         });
         snapshot.workspaces.push(child);
     }
@@ -1100,7 +1102,7 @@ fn saved_machine_preserves_endpoint_scoped_worktree_collapses() {
         .group_toggle
         .as_ref()
         .expect("local worktree group marker");
-    assert_eq!(key, "repo");
+    assert_eq!(key, "ws_1");
     let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
     assert_eq!(buffer[(local_toggle.x, local_toggle.y)].symbol(), "▸");
     assert!((local_parent.rect.x..local_parent.rect.right())
@@ -1303,12 +1305,14 @@ fn expanded_machine_sidebar_applies_space_row_gap_within_each_machine() {
         key: "repo".into(),
         label: "repo".into(),
         is_linked_worktree: false,
+        parent_workspace_id: None,
     });
     add_second_workspace(&mut remote);
     remote.workspaces[1].worktree = Some(ClientShellWorktree {
         key: "repo".into(),
         label: "repo".into(),
         is_linked_worktree: true,
+        parent_workspace_id: Some("ws_1".into()),
     });
     let mut third = remote.workspaces[1].clone();
     third.workspace_id = "ws_3".into();

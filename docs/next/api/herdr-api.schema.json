@@ -1147,6 +1147,13 @@
             "is_linked_worktree": {
               "type": "boolean"
             },
+            "parent_workspace_id": {
+              "description": "Workspace this linked checkout was created from, when recorded.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "repo_key": {
               "type": "string"
             },
@@ -4530,6 +4537,13 @@
             },
             "is_linked_worktree": {
               "type": "boolean"
+            },
+            "parent_workspace_id": {
+              "description": "Workspace this linked checkout was created from, when recorded.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "repo_key": {
               "type": "string"
@@ -10645,6 +10659,13 @@
             },
             "is_linked_worktree": {
               "type": "boolean"
+            },
+            "parent_workspace_id": {
+              "description": "Workspace this linked checkout was created from, when recorded.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "repo_key": {
               "type": "string"

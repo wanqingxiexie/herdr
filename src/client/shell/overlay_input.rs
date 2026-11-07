@@ -1148,29 +1148,27 @@ impl ClientShellState {
         else {
             return false;
         };
-        let group_key = workspace
-            .worktree
-            .as_ref()
-            .filter(|_| {
-                close_group.unwrap_or_else(|| {
-                    super::sidebar::workspace_close_is_group(snapshot, workspace)
-                })
-            })
-            .map(|worktree| worktree.key.as_str());
-        let group = group_key
-            .map(|key| {
-                snapshot
-                    .workspaces
-                    .iter()
-                    .filter(|member| {
-                        member
-                            .worktree
-                            .as_ref()
-                            .is_some_and(|worktree| worktree.key == key)
+        let closes_whole_group = close_group
+            .unwrap_or_else(|| super::sidebar::workspace_close_is_group(snapshot, workspace));
+        let group = if closes_whole_group {
+            let children = super::sidebar::space_children(snapshot);
+            let parent = snapshot
+                .workspaces
+                .iter()
+                .position(|member| member.workspace_id == workspace.workspace_id);
+            parent
+                .and_then(|index| {
+                    children.get(&index).map(|members| {
+                        std::iter::once(index)
+                            .chain(members.iter().copied())
+                            .map(|member| &snapshot.workspaces[member])
+                            .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| vec![workspace]);
+                })
+                .unwrap_or_else(|| vec![workspace])
+        } else {
+            vec![workspace]
+        };
         let closes_group = group.len() > 1;
         // Keep parent-group tab closes on the existing server confirmation path.
         if tab_id.is_some() && closes_group {

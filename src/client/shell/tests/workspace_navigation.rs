@@ -21,6 +21,7 @@ fn grouped_workspaces() -> ClientShellSnapshot {
             key: "repo".into(),
             label: "repo".into(),
             is_linked_worktree: linked,
+            parent_workspace_id: linked.then(|| "ws_1".into()),
         });
     }
     projected
@@ -362,7 +363,7 @@ fn mouse_clicks_cancel_remote_workspace_navigation() {
 fn single_machine_compact_navigation_includes_visible_collapsed_group_children() {
     let (mut state, _) = navigation_state(grouped_workspaces());
     state.set_endpoint_catalog(&[]);
-    state.toggle_collapsed_group(&ClientEndpointId::Local, "repo".into());
+    state.toggle_collapsed_group(&ClientEndpointId::Local, "ws_1".into());
     state.sidebar_collapsed = true;
     state.compose(100, 28).unwrap();
     workspace_rect(&state, &ClientEndpointId::Local, "ws_3");
@@ -382,7 +383,7 @@ fn workspace_navigation_respects_each_machines_visible_worktree_groups() {
         (44, true, true, false),
     ] {
         let (mut state, remote) = navigation_state(grouped_workspaces());
-        state.toggle_collapsed_group(&remote, "repo".into());
+        state.toggle_collapsed_group(&remote, "ws_1".into());
         state.sidebar_collapsed = compact;
         if unavailable {
             state.pane_surface = None;
@@ -412,8 +413,8 @@ fn workspace_navigation_respects_each_machines_visible_worktree_groups() {
                 workspace_rect(&state, endpoint, id);
             }
         }
-        assert!(state.group_is_collapsed(&remote, "repo"));
-        assert!(!state.group_is_collapsed(&ClientEndpointId::Local, "repo"));
+        assert!(state.group_is_collapsed(&remote, "ws_1"));
+        assert!(!state.group_is_collapsed(&ClientEndpointId::Local, "ws_1"));
     }
 }
 

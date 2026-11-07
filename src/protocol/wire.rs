@@ -1039,6 +1039,11 @@ pub struct ClientShellWorktree {
     pub key: String,
     pub label: String,
     pub is_linked_worktree: bool,
+    /// Workspace this linked checkout was created from. Absent for parent
+    /// workspaces and for endpoints that predate this field; the client falls
+    /// back to matching the label prefix before the first `/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

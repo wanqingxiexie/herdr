@@ -324,7 +324,7 @@ impl App {
         }
         if let Some(ws_idx) = source.workspace_idx {
             let membership =
-                worktree_membership(source, source.source_checkout_path.clone(), false);
+                worktree_membership(source, source.source_checkout_path.clone(), false, None);
             self.set_worktree_membership(ws_idx, membership, !created_parent);
             if created_parent && emit_created_event {
                 self.emit_workspace_open_events(ws_idx);
@@ -359,7 +359,23 @@ impl App {
         target_is_linked_worktree: bool,
         emit_update: bool,
     ) {
-        let membership = worktree_membership(source, target_path, target_is_linked_worktree);
+        // Record which workspace the operator created this checkout from so the
+        // sidebar can nest it under that workspace rather than under whichever
+        // workspace of the same repository happens to be first.
+        let parent_workspace_id = if target_is_linked_worktree {
+            source
+                .workspace_idx
+                .and_then(|idx| self.state.workspaces.get(idx))
+                .map(|workspace| workspace.id.clone())
+        } else {
+            None
+        };
+        let membership = worktree_membership(
+            source,
+            target_path,
+            target_is_linked_worktree,
+            parent_workspace_id,
+        );
         self.set_worktree_membership(target_ws_idx, membership, emit_update);
     }
 
@@ -573,6 +589,7 @@ fn worktree_membership(
     source: &WorktreeSource,
     checkout_path: PathBuf,
     is_linked_worktree: bool,
+    parent_workspace_id: Option<String>,
 ) -> crate::workspace::WorktreeSpaceMembership {
     crate::workspace::WorktreeSpaceMembership {
         key: source.repo_key.clone(),
@@ -580,6 +597,7 @@ fn worktree_membership(
         repo_root: source.source_repo_root.clone(),
         checkout_path,
         is_linked_worktree,
+        parent_workspace_id,
     }
 }
 
@@ -829,6 +847,105 @@ mod tests {
                 EventKind::WorktreeCreated,
             ]
         );
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let remove = crate::worktree::build_worktree_remove_command(
+            &repo,
+            Path::new(&worktree.path),
+            false,
+            false,
+        );
+        crate::worktree::run_worktree_command(&remove).unwrap();
+        let _ = std::fs::remove_dir_all(worktree_root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[tokio::test]
+    async fn worktree_create_records_the_workspace_it_was_created_from() {
+        let repo = create_committed_repo("api-worktree-parent-provenance-repo");
+        let worktree_root = unique_temp_path("api-worktree-parent-provenance-root");
+        let mut app = test_app();
+        let mut research = Workspace::test_new("research");
+        research.identity_cwd = repo.clone();
+        let mut games = Workspace::test_new("games");
+        games.identity_cwd = repo.clone();
+        app.state.workspaces = vec![research, games];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(1);
+        app.state.selected = 1;
+        app.state.worktree_directory = worktree_root.clone();
+        let research_id = app.state.workspaces[0].id.clone();
+        let games_id = app.state.workspaces[1].id.clone();
+        // Both workspaces share one repository, so the repo key alone cannot
+        // distinguish which workspace a checkout belongs under.
+        for index in 0..2 {
+            app.set_worktree_membership(
+                index,
+                crate::workspace::WorktreeSpaceMembership {
+                    key: crate::workspace::git_space_metadata(&repo).unwrap().key,
+                    label: "wancloudy".into(),
+                    repo_root: repo.clone(),
+                    checkout_path: repo.clone(),
+                    is_linked_worktree: false,
+                    parent_workspace_id: None,
+                },
+                false,
+            );
+        }
+
+        let response = run_deferred_api_request(
+            &mut app,
+            Request {
+                id: "req".into(),
+                method: crate::api::schema::Method::WorktreeCreate(WorktreeCreateParams {
+                    workspace_id: Some(games_id.clone()),
+                    branch: Some("worktree/games-lane".into()),
+                    ..WorktreeCreateParams::default()
+                }),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
+            panic!("expected worktree_created response");
+        };
+        let child = app
+            .state
+            .workspaces
+            .iter()
+            .find(|workspace| {
+                workspace
+                    .worktree_space()
+                    .is_some_and(|space| space.is_linked_worktree)
+            })
+            .expect("created worktree workspace");
+        assert_eq!(
+            child
+                .worktree_space()
+                .and_then(|space| space.parent_workspace_id.clone()),
+            Some(games_id.clone())
+        );
+        // The sidebar nests by provenance, so the games workspace owns it and
+        // the research workspace does not.
+        let games_index = app
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.id == games_id)
+            .unwrap();
+        let research_index = app
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.id == research_id)
+            .unwrap();
+        assert_eq!(app.state.worktree_children_indices(games_index).len(), 1);
+        assert!(app
+            .state
+            .worktree_children_indices(research_index)
+            .is_empty());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
@@ -1132,6 +1249,7 @@ mod tests {
             repo_root: "/repo/other".into(),
             checkout_path: "/repo/other".into(),
             is_linked_worktree: false,
+            parent_workspace_id: None,
         });
         let (respond_to, response_rx) = response_channel();
 
@@ -2079,6 +2197,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let child_id = child.id.clone();
         app.state.workspaces.push(child);
@@ -2150,6 +2269,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let child_id = child.id.clone();
         app.state.workspaces.push(child);
@@ -2235,6 +2355,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let child_id = child.id.clone();
         app.state.workspaces.push(child);
@@ -2312,6 +2433,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let child_id = child.id.clone();
         app.state.workspaces.push(child);
@@ -2378,6 +2500,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         };
         let mut first = Workspace::test_new("first");
         first.identity_cwd = checkout.clone();
@@ -2489,6 +2612,7 @@ mod tests {
             repo_root: repo.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let child_id = child.id.clone();
         app.state.workspaces.push(child);
@@ -2535,6 +2659,7 @@ mod tests {
             repo_root: checkout.clone(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let workspace_id = workspace.id.clone();
         let pane_id = workspace.tabs[0].root_pane;
@@ -2639,6 +2764,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         };
         let mut parent = Workspace::test_new("parent");
         parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
@@ -2712,6 +2838,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let child_id = child.id.clone();
         let child_pane_id = child.tabs[0].root_pane;
@@ -2733,6 +2860,7 @@ mod tests {
             repo_root: "/repo/herdr".into(),
             checkout_path: "/repo/other".into(),
             is_linked_worktree: true,
+            parent_workspace_id: None,
         });
         let (respond_to, response_rx) = response_channel();
 

@@ -5394,6 +5394,7 @@ fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
         repo_root: "/repo/herdr".into(),
         checkout_path: checkout.clone(),
         is_linked_worktree: true,
+        parent_workspace_id: None,
     });
     let workspace_id = workspace.id.clone();
     let pane_id = workspace.tabs[0].root_pane;
